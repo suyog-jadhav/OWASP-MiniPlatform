@@ -101,6 +101,14 @@ router.post(
       return;
     }
 
+    console.log('--- TOTP LOGIN DEBUG ---');
+    console.log('Admin ID:', admin.id);
+    console.log('Secret:', admin.totp_secret);
+    console.log('Submitted Code:', totp_code);
+    console.log('Expected Code (current):', authenticator.generate(admin.totp_secret));
+    console.log('Server Time:', new Date().toISOString());
+    console.log('------------------------');
+
     const totpValid = authenticator.verify({
       token: totp_code,
       secret: admin.totp_secret,
@@ -233,6 +241,14 @@ router.post('/verify-totp', async (req: Request, res: Response): Promise<void> =
     res.status(400).json({ error: 'TOTP not yet set up. Call /setup-totp first.' });
     return;
   }
+
+  console.log('--- TOTP SETUP VERIFY DEBUG ---');
+  console.log('Admin ID:', admin.id);
+  console.log('Secret:', admin.totp_secret);
+  console.log('Submitted Code:', totp_code);
+  console.log('Expected Code (current):', authenticator.generate(admin.totp_secret));
+  console.log('Server Time:', new Date().toISOString());
+  console.log('-------------------------------');
 
   const valid = authenticator.verify({ token: totp_code, secret: admin.totp_secret });
   if (!valid) {
