@@ -2,6 +2,9 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
+
+// Configure time tolerance to 2 steps (±60s) to absorb clock drift between client and server
+authenticator.options = { window: 2 };
 import { supabase } from '../lib/supabase';
 import {
   sha256,
