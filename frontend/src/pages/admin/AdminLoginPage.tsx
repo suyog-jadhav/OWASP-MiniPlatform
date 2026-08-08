@@ -48,8 +48,7 @@ export default function AdminLoginPage() {
       } else if (status === 429) {
         setError('Too many attempts. Please wait 15 minutes.');
       } else {
-        // Likely needs TOTP
-        setStep('totp');
+        setError(serverError?.error || serverError?.message || err.message || 'Failed to connect to backend server');
       }
     } finally {
       setLoading(false);
