@@ -85,38 +85,30 @@ router.post(
       return;
     }
 
-    // TOTP is mandatory — if not yet enabled, force setup
-    if (!admin.totp_enabled || !admin.totp_secret) {
-      res.status(403).json({
-        error: 'totp_setup_required',
-        message: 'Please complete TOTP 2FA setup before logging in.',
-        admin_id: admin.id,
+    // Verify TOTP code only if enabled in database
+    if (admin.totp_enabled && admin.totp_secret) {
+      if (!totp_code) {
+        res.status(400).json({ error: 'TOTP code required' });
+        return;
+      }
+
+      console.log('--- TOTP LOGIN DEBUG ---');
+      console.log('Admin ID:', admin.id);
+      console.log('Secret:', admin.totp_secret);
+      console.log('Submitted Code:', totp_code);
+      console.log('Expected Code (current):', authenticator.generate(admin.totp_secret));
+      console.log('Server Time:', new Date().toISOString());
+      console.log('------------------------');
+
+      const totpValid = authenticator.verify({
+        token: totp_code,
+        secret: admin.totp_secret,
       });
-      return;
-    }
 
-    // Verify TOTP code
-    if (!totp_code) {
-      res.status(400).json({ error: 'TOTP code required' });
-      return;
-    }
-
-    console.log('--- TOTP LOGIN DEBUG ---');
-    console.log('Admin ID:', admin.id);
-    console.log('Secret:', admin.totp_secret);
-    console.log('Submitted Code:', totp_code);
-    console.log('Expected Code (current):', authenticator.generate(admin.totp_secret));
-    console.log('Server Time:', new Date().toISOString());
-    console.log('------------------------');
-
-    const totpValid = authenticator.verify({
-      token: totp_code,
-      secret: admin.totp_secret,
-    });
-
-    if (!totpValid) {
-      res.status(401).json({ error: 'Invalid TOTP code' });
-      return;
+      if (!totpValid) {
+        res.status(401).json({ error: 'Invalid TOTP code' });
+        return;
+      }
     }
 
     // Issue admin session
