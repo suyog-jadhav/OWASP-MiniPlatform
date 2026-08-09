@@ -35,8 +35,7 @@ async function main() {
   console.log('\nNext steps:');
   console.log('1. Start your backend and frontend apps.');
   console.log('2. Go to the Admin Console login page on the frontend (e.g. /admin/login).');
-  console.log('3. Enter the email and password.');
-  console.log('4. The platform will prompt you to set up Google Authenticator 2FA (TOTP) and display a QR code.');
+  console.log('3. Enter the email and password to log in.');
 }
 
 main();

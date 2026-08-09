@@ -1,7 +1,21 @@
 import { Resend } from 'resend';
+import Mailjet from 'node-mailjet';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || 'resend';
 const FROM_EMAIL = process.env.EMAIL_FROM ?? 'noreply@suyogjadhav.online';
+
+let resendClient: Resend | null = null;
+if (process.env.RESEND_API_KEY) {
+  resendClient = new Resend(process.env.RESEND_API_KEY);
+}
+
+let mailjetClient: any = null;
+if (process.env.MJ_APIKEY_PUBLIC && process.env.MJ_APIKEY_PRIVATE) {
+  mailjetClient = Mailjet.apiConnect(
+    process.env.MJ_APIKEY_PUBLIC,
+    process.env.MJ_APIKEY_PRIVATE
+  );
+}
 
 interface InviteEmailOptions {
   to: string;
@@ -17,12 +31,8 @@ interface InviteEmailOptions {
  */
 export async function sendInviteEmail(opts: InviteEmailOptions): Promise<void> {
   const { to, playerName, eventName, accessCode, loginUrl } = opts;
-
-  await resend.emails.send({
-    from: FROM_EMAIL,
-    to,
-    subject: `You're invited to ${eventName}`,
-    html: `
+  const subject = `You're invited to ${eventName}`;
+  const htmlContent = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -69,8 +79,41 @@ export async function sendInviteEmail(opts: InviteEmailOptions): Promise<void> {
   </div>
 </body>
 </html>
-    `.trim(),
-  });
+  `.trim();
+
+  if (EMAIL_PROVIDER === 'mailjet') {
+    if (!mailjetClient) {
+      throw new Error('Mailjet client not initialized. Make sure MJ_APIKEY_PUBLIC and MJ_APIKEY_PRIVATE are set.');
+    }
+    await mailjetClient.post('send', { version: 'v3.1' }).request({
+      Messages: [
+        {
+          From: {
+            Email: FROM_EMAIL,
+            Name: 'CTF Platform',
+          },
+          To: [
+            {
+              Email: to,
+              Name: playerName,
+            },
+          ],
+          Subject: subject,
+          HTMLPart: htmlContent,
+        },
+      ],
+    });
+  } else {
+    if (!resendClient) {
+      throw new Error('Resend client not initialized. Make sure RESEND_API_KEY is set.');
+    }
+    await resendClient.emails.send({
+      from: FROM_EMAIL,
+      to,
+      subject,
+      html: htmlContent,
+    });
+  }
 }
 
 /**
@@ -84,12 +127,8 @@ export async function sendTicketReplyEmail(opts: {
   platformUrl: string;
 }): Promise<void> {
   const { to, playerName, ticketSubject, replyMessage, platformUrl } = opts;
-
-  await resend.emails.send({
-    from: FROM_EMAIL,
-    to,
-    subject: `Re: ${ticketSubject}`,
-    html: `
+  const subject = `Re: ${ticketSubject}`;
+  const htmlContent = `
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8" />
@@ -111,6 +150,39 @@ export async function sendTicketReplyEmail(opts: {
 </div>
 </body>
 </html>
-    `.trim(),
-  });
+  `.trim();
+
+  if (EMAIL_PROVIDER === 'mailjet') {
+    if (!mailjetClient) {
+      throw new Error('Mailjet client not initialized. Make sure MJ_APIKEY_PUBLIC and MJ_APIKEY_PRIVATE are set.');
+    }
+    await mailjetClient.post('send', { version: 'v3.1' }).request({
+      Messages: [
+        {
+          From: {
+            Email: FROM_EMAIL,
+            Name: 'CTF Platform',
+          },
+          To: [
+            {
+              Email: to,
+              Name: playerName,
+            },
+          ],
+          Subject: subject,
+          HTMLPart: htmlContent,
+        },
+      ],
+    });
+  } else {
+    if (!resendClient) {
+      throw new Error('Resend client not initialized. Make sure RESEND_API_KEY is set.');
+    }
+    await resendClient.emails.send({
+      from: FROM_EMAIL,
+      to,
+      subject,
+      html: htmlContent,
+    });
+  }
 }

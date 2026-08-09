@@ -1,10 +1,5 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { authenticator } from 'otplib';
-import QRCode from 'qrcode';
-
-// Configure time tolerance to 2 steps (±60s) to absorb clock drift between client and server
-authenticator.options = { window: 2 };
 import { supabase } from '../lib/supabase';
 import {
   sha256,
@@ -24,11 +19,6 @@ const ADMIN_SESSION_TTL_HOURS = 4;
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
-  totp_code: z.string().length(6).optional(),
-});
-
-const setupTotpVerifySchema = z.object({
-  totp_code: z.string().length(6),
 });
 
 const createAdminSchema = z.object({
@@ -49,7 +39,7 @@ function adminSessionExpiresAt(): string {
 /**
  * POST /api/admin/auth/login
  *
- * Email + argon2id password verification, followed by TOTP check if enabled.
+ * Email + argon2id password verification.
  * Rate limit: 5 / 15 min per IP (strictest in the system).
  */
 router.post(
@@ -62,13 +52,13 @@ router.post(
       return;
     }
 
-    const { email, password, totp_code } = parseResult.data;
+    const { email, password } = parseResult.data;
     const ip = req.ip ?? 'unknown';
     const GENERIC_ERROR = 'Invalid credentials';
 
     const { data: admin } = await supabase
       .from('admins')
-      .select('id, password_hash, totp_secret, totp_enabled')
+      .select('id, password_hash')
       .eq('email', email.toLowerCase())
       .single();
 
@@ -83,32 +73,6 @@ router.post(
     if (!passwordOk) {
       res.status(401).json({ error: GENERIC_ERROR });
       return;
-    }
-
-    // Verify TOTP code only if enabled in database
-    if (admin.totp_enabled && admin.totp_secret) {
-      if (!totp_code) {
-        res.status(400).json({ error: 'TOTP code required' });
-        return;
-      }
-
-      console.log('--- TOTP LOGIN DEBUG ---');
-      console.log('Admin ID:', admin.id);
-      console.log('Secret:', admin.totp_secret);
-      console.log('Submitted Code:', totp_code);
-      console.log('Expected Code (current):', authenticator.generate(admin.totp_secret));
-      console.log('Server Time:', new Date().toISOString());
-      console.log('------------------------');
-
-      const totpValid = authenticator.verify({
-        token: totp_code,
-        secret: admin.totp_secret,
-      });
-
-      if (!totpValid) {
-        res.status(401).json({ error: 'Invalid TOTP code' });
-        return;
-      }
     }
 
     // Issue admin session
@@ -152,108 +116,6 @@ router.post('/logout', requireAdminAuth, async (req: AdminRequest, res: Response
 });
 
 /**
- * POST /api/admin/auth/setup-totp
- *
- * First-time TOTP setup. Generates a secret and QR code.
- * Only usable when totp_enabled = false.
- * Requires valid password proof (not a full session, to allow pre-2FA setup).
- */
-router.post('/setup-totp', async (req: Request, res: Response): Promise<void> => {
-  const { admin_id, password } = req.body;
-
-  if (!admin_id || !password) {
-    res.status(400).json({ error: 'admin_id and password are required' });
-    return;
-  }
-
-  const { data: admin } = await supabase
-    .from('admins')
-    .select('id, email, password_hash, totp_enabled')
-    .eq('id', admin_id)
-    .single();
-
-  if (!admin) {
-    res.status(404).json({ error: 'Admin not found' });
-    return;
-  }
-
-  if (admin.totp_enabled) {
-    res.status(400).json({ error: 'TOTP is already configured' });
-    return;
-  }
-
-  const passwordOk = await verifyPassword(admin.password_hash, password);
-  if (!passwordOk) {
-    res.status(401).json({ error: 'Invalid password' });
-    return;
-  }
-
-  // Generate TOTP secret
-  const secret = authenticator.generateSecret();
-  const otpAuthUrl = authenticator.keyuri(admin.email, 'CTF Platform', secret);
-  const qrCodeDataUrl = await QRCode.toDataURL(otpAuthUrl);
-
-  // Store the secret (not yet enabled — enabled after verify)
-  await supabase.from('admins').update({ totp_secret: secret }).eq('id', admin.id);
-
-  res.status(200).json({
-    secret,
-    qr_code: qrCodeDataUrl,
-    message: 'Scan the QR code with your authenticator app, then call /verify-totp to enable.',
-  });
-});
-
-/**
- * POST /api/admin/auth/verify-totp
- *
- * Confirms TOTP setup by verifying a code. Enables TOTP on the admin account.
- */
-router.post('/verify-totp', async (req: Request, res: Response): Promise<void> => {
-  const parseResult = setupTotpVerifySchema.safeParse(req.body);
-  if (!parseResult.success) {
-    res.status(400).json({ error: 'Invalid request body' });
-    return;
-  }
-
-  const { totp_code } = parseResult.data;
-  const { admin_id } = req.body;
-
-  if (!admin_id) {
-    res.status(400).json({ error: 'admin_id is required' });
-    return;
-  }
-
-  const { data: admin } = await supabase
-    .from('admins')
-    .select('id, totp_secret, totp_enabled')
-    .eq('id', admin_id)
-    .single();
-
-  if (!admin || !admin.totp_secret) {
-    res.status(400).json({ error: 'TOTP not yet set up. Call /setup-totp first.' });
-    return;
-  }
-
-  console.log('--- TOTP SETUP VERIFY DEBUG ---');
-  console.log('Admin ID:', admin.id);
-  console.log('Secret:', admin.totp_secret);
-  console.log('Submitted Code:', totp_code);
-  console.log('Expected Code (current):', authenticator.generate(admin.totp_secret));
-  console.log('Server Time:', new Date().toISOString());
-  console.log('-------------------------------');
-
-  const valid = authenticator.verify({ token: totp_code, secret: admin.totp_secret });
-  if (!valid) {
-    res.status(401).json({ error: 'Invalid TOTP code' });
-    return;
-  }
-
-  await supabase.from('admins').update({ totp_enabled: true }).eq('id', admin.id);
-
-  res.status(200).json({ message: 'TOTP 2FA enabled successfully' });
-});
-
-/**
  * POST /api/admin/auth/create
  *
  * Create the initial admin account. Should be restricted to internal use only.
@@ -292,7 +154,7 @@ router.post('/create', async (req: Request, res: Response): Promise<void> => {
 
   res.status(201).json({
     admin,
-    next_step: 'Call /api/admin/auth/setup-totp to configure TOTP 2FA (mandatory)',
+    next_step: 'Admin account created successfully.',
   });
 });
 

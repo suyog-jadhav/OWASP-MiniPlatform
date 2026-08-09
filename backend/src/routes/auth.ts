@@ -80,7 +80,11 @@ router.post(
 
     // 2. Constant-time compare sha256(code) vs stored code_hash
     const codeHash = sha256(code);
-    if (!timingSafeEqual(codeHash, eventPlayer.code_hash)) {
+    let storedHash = eventPlayer.code_hash;
+    if (storedHash.includes(':')) {
+      storedHash = storedHash.split(':')[1];
+    }
+    if (!timingSafeEqual(codeHash, storedHash)) {
       await logAttempt(false);
       res.status(401).json({ error: GENERIC_ERROR });
       return;
@@ -204,7 +208,11 @@ router.post(
     }
 
     const codeHash = sha256(code);
-    if (!timingSafeEqual(codeHash, eventPlayer.code_hash)) {
+    let storedHash = eventPlayer.code_hash;
+    if (storedHash.includes(':')) {
+      storedHash = storedHash.split(':')[1];
+    }
+    if (!timingSafeEqual(codeHash, storedHash)) {
       await logAttempt(false);
       res.status(401).json({ error: GENERIC_ERROR });
       return;

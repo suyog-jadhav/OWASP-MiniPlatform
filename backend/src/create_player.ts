@@ -79,7 +79,7 @@ async function main() {
       {
         event_id: eventId,
         player_id: playerId,
-        code_hash: codeHash,
+        code_hash: `${accessCode}:${codeHash}`,
         revoked: false,
       },
       { onConflict: 'event_id,player_id' }

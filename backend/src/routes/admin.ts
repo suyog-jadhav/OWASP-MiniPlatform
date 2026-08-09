@@ -92,7 +92,7 @@ router.post('/players/import', requireAdminAuth, async (req: AdminRequest, res: 
       const { error: epError } = await supabase.from('event_players').upsert({
         event_id,
         player_id: player.id,
-        code_hash: codeHash,
+        code_hash: `${code}:${codeHash}`,
         invited_at: new Date().toISOString(),
       }, { onConflict: 'event_id,player_id' });
       if (epError) { results.errors.push(`Failed to register player ${row.email}`); continue; }
@@ -100,7 +100,8 @@ router.post('/players/import', requireAdminAuth, async (req: AdminRequest, res: 
       // Fetch event name for email
       const { data: event } = await supabase.from('events').select('name').eq('id', event_id).single();
 
-      // Send invite email with plaintext code (only ever appears here)
+      // Mail service hidden - password is shown on dashboard
+      /*
       await sendInviteEmail({
         to: row.email.toLowerCase(),
         playerName: row.name ?? row.email,
@@ -108,6 +109,7 @@ router.post('/players/import', requireAdminAuth, async (req: AdminRequest, res: 
         accessCode: code,
         loginUrl: `${login_base_url ?? process.env.ALLOWED_ORIGIN}?event=${event_id}`,
       });
+      */
 
       results.invited++;
     } catch (err) {
@@ -140,20 +142,29 @@ router.post('/players/invite', requireAdminAuth, async (req: AdminRequest, res: 
   const codeHash = sha256(code);
 
   await supabase.from('event_players').upsert({
-    event_id, player_id: player.id, code_hash: codeHash,
+    event_id, player_id: player.id, code_hash: `${code}:${codeHash}`,
     invited_at: new Date().toISOString(),
   }, { onConflict: 'event_id,player_id' });
 
   const { data: event } = await supabase.from('events').select('name').eq('id', event_id).single();
 
-  await sendInviteEmail({
-    to: email.toLowerCase(), playerName: name ?? email,
-    eventName: event?.name ?? 'CTF Event', accessCode: code,
-    loginUrl: `${login_base_url ?? process.env.ALLOWED_ORIGIN}?event=${event_id}`,
-  });
+  // Mail service hidden - password is shown on dashboard
+  /*
+  try {
+    await sendInviteEmail({
+      to: email.toLowerCase(), playerName: name ?? email,
+      eventName: event?.name ?? 'CTF Event', accessCode: code,
+      loginUrl: `${login_base_url ?? process.env.ALLOWED_ORIGIN}?event=${event_id}`,
+    });
+  } catch (emailError: any) {
+    console.error('[EmailService Error]', emailError?.message || emailError);
+    res.status(500).json({ error: `Failed to send invite email: ${emailError?.message || emailError}` });
+    return;
+  }
+  */
 
   await logAdminAction(req.adminId!, 'player.invite', req.ip ?? '', { targetTable: 'event_players', metadata: { event_id, email } });
-  res.status(201).json({ message: 'Invite sent' });
+  res.status(201).json({ message: 'Player added' });
 });
 
 /**
@@ -162,11 +173,24 @@ router.post('/players/invite', requireAdminAuth, async (req: AdminRequest, res: 
 router.get('/events/:event_id/players', requireAdminAuth, async (req: AdminRequest, res: Response): Promise<void> => {
   const { data, error } = await supabase
     .from('event_players')
-    .select(`id, revoked, invited_at, used_at, last_login_at, active_session_id, players(id, email, name, global_banned)`)
+    .select(`id, code_hash, revoked, invited_at, used_at, last_login_at, active_session_id, players(id, email, name, global_banned)`)
     .eq('event_id', req.params.event_id)
     .order('invited_at', { ascending: false });
   if (error) { res.status(500).json({ error: error.message }); return; }
-  res.json(data);
+
+  const mapped = (data || []).map((ep: any) => {
+    let accessCode = null;
+    if (ep.code_hash && ep.code_hash.includes(':')) {
+      accessCode = ep.code_hash.split(':')[0];
+    }
+    const { code_hash, ...rest } = ep;
+    return {
+      ...rest,
+      access_code: accessCode,
+    };
+  });
+
+  res.json(mapped);
 });
 
 /**
@@ -182,6 +206,16 @@ router.post('/players/:event_player_id/revoke', requireAdminAuth, async (req: Ad
   await supabase.from('event_players').update({ revoked: true, active_session_id: null }).eq('id', event_player_id);
   await logAdminAction(req.adminId!, 'player.revoke', req.ip ?? '', { targetTable: 'event_players', targetId: event_player_id });
   res.json({ message: 'Player revoked' });
+});
+
+/**
+ * POST /api/admin/players/:event_player_id/restore
+ */
+router.post('/players/:event_player_id/restore', requireAdminAuth, async (req: AdminRequest, res: Response): Promise<void> => {
+  const { event_player_id } = req.params;
+  await supabase.from('event_players').update({ revoked: false }).eq('id', event_player_id);
+  await logAdminAction(req.adminId!, 'player.restore', req.ip ?? '', { targetTable: 'event_players', targetId: event_player_id });
+  res.json({ message: 'Player access restored' });
 });
 
 /**
@@ -364,6 +398,33 @@ router.get('/announcements/:event_id', requireAdminAuth, async (req: AdminReques
     .order('created_at', { ascending: false });
   if (error) { res.status(500).json({ error: error.message }); return; }
   res.json(data);
+});
+
+router.patch('/announcements/:id', requireAdminAuth, async (req: AdminRequest, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { message } = req.body;
+  if (!message) { res.status(400).json({ error: 'message is required' }); return; }
+
+  const { data, error } = await supabase.from('announcements')
+    .update({ message })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) { res.status(500).json({ error: error.message }); return; }
+  await logAdminAction(req.adminId!, 'announcement.update', req.ip ?? '', { targetId: id, metadata: { message } });
+  res.json(data);
+});
+
+router.delete('/announcements/:id', requireAdminAuth, async (req: AdminRequest, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { error } = await supabase.from('announcements')
+    .delete()
+    .eq('id', id);
+
+  if (error) { res.status(500).json({ error: error.message }); return; }
+  await logAdminAction(req.adminId!, 'announcement.delete', req.ip ?? '', { targetId: id });
+  res.json({ message: 'Announcement deleted' });
 });
 
 // ── Support Tickets ───────────────────────────────────────────────────────────
